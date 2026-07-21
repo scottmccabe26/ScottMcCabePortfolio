@@ -1,0 +1,599 @@
+---
+title: "Predicting Future Pitcher Performance: A Comparison of Traditional Statistics and Statcast Metrics"
+author: "Scott McCabe"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html: 
+    code-fold: true
+    code-tools: true
+    html-math-method: katex
+    embed-resources: true
+    self-contained-math: true	
+  pdf: 
+    geometry: 
+      - top=30mm
+      - left=20mm
+execute:
+    warning: false
+---
+
+## Introduction
+
+* Recently, there has been a growing debate about the usage of advanced statistics in baseball. Many new analysts have been arguing that traditional statistics, such as ERA, are not good indicators of a pitchers performance. 
+* This winter, teams needed to make decisions about which pitchers to sign for the upcoming season. Interestingly, many teams signed pitchers with high ERAs, due to their strong underlying metrics. Similarly, many teams declined to sign pitchers with low ERAs, due to their poor underlying metrics.
+* This project will attempt to determine which statistics are the best predictors of a pitcher's future ERA. We will look at traditional statistics, statcast data, and a mix of the two. 
+* Finally, we will attempt to predict the top pitchers in the league for the upcoming season, based on our model.
+
+## Background
+
+### Traditional Statistics 
+* Traditional statistics, such as earned run average (ERA), strikeout rate, and walk rate have been used for decades to evaluate pitchers. 
+* These statistics are easy to understand and calculate, but have been criticized for not accounting for factors such as defense, luck, and park effects. 
+* For example, a pitcher with an elite defense behind him may have a lower ERA than a pitcher with a poor defense, even if they have the same underlying performance.
+
+### Statcast Data
+* Statcast data, such as exit velocity, expected batting average, and launch angle, began being collected in 2015 and has provided a new way to evaluate pitchers.
+* These statistics are more difficult to understand and calculate, but have been praised for providing a more accurate picture of a pitcher's performance.
+* For example, a pitcher may have a lower expected batting average against than their actual batting average against, which could indicate that they were unlucky and may perform better in the future.
+
+### Example
+* This offseason, former Boston Red Sox pitcher, Lucas Giolito, was left unsigned for the entire offseason, despite having a solid 3.41 ERA in the 2025 season. The MLB average ERA in 2025 was 4.15, so Giolito's ERA was well above average. However, his underlying metrics were poor, leading many analysts to believe that he had a lucky season and his performance would regress.
+* On the other hand, when Giolito signed with the Red Sox in 2024, he had an ERA of 4.88 in the 2023 season, which was below average. However, his underlying metrics were strong, leading many analysts to believe that he had an unlucky season and his performance would improve. 
+
+## Data
+* The data for this project was collected from Baseball Savant, which provides a complete database of data from the MLB. This includes both traditional statistics and statcast data for all pitchers from 2016 to 2025.
+
+```{python}
+import pandas as pd
+
+df = pd.read_csv("stats.csv")
+
+# Clearer identifier
+df['pitcher_id'] = df['player_id']
+df = df.sort_values(['pitcher_id', 'year'])
+
+# Convert IP to numeric
+def convert_ip(ip):
+    ip = float(ip)
+    whole = int(ip)
+    frac = round(ip - whole, 1)
+
+    if frac == 0.1:
+        return whole + 1/3
+    elif frac == 0.2:
+        return whole + 2/3
+    else:
+        return whole
+
+df['ip_true'] = df['p_formatted_ip'].apply(convert_ip)
+
+# Home run rate
+df['hr_per_9'] = df['home_run'] / df['ip_true'] * 9
+
+# Clean names
+def clean_name(x):
+    return x.lower().replace(".", "").strip()
+
+df['name_clean'] = df['last_name, first_name'].apply(clean_name)
+
+# Target variable: next year's ERA
+df['target_era_next_year'] = (
+    df.groupby('pitcher_id')['p_era'].shift(-1)
+)
+
+# Now define modeling dataset
+df_model = df.dropna(subset=['target_era_next_year']).copy()
+```
+
+Display of the dataset:
+```{python}
+df_model.head()
+```
+
+## Methods
+
+* The goal of this project is to evaluate the ability of traditional statistics and statcast metrics to predict future pitcher performance. 
+* The response variable is the pitcher's ERA in the following season, which is a commonly used measure of a pitcher's performance.
+* To construct this outcome, the dataset was sorted by pitcher and year, and the ERA for the next season was assigned to each row. This allows us to use the current season's statistics to predict the next season's ERA.
+  * ERA, or Earned Run Average, is calculated as (Earned Runs / Innings Pitched) * 9. It represents the average number of earned runs a pitcher allows per nine innings pitched. A lower ERA indicates better performance.
+
+Predictor Variables are divided into two categories: traditional statistics and statcast metrics.
+
+* Traditional statistics include:
+  * Batting Average Against
+    * BAA is calculated as (Hits Allowed / At Bats Against). It represents the average number of hits a pitcher allows per at-bat.
+  * Strikeout Rate
+    * Strikeout Rate is calculated as (Strikeouts / Batters Faced). It represents the percentage of at-bats that result in a strikeout.
+  * Walk Rate
+    * Walk Rate is calculated as (Walks / Batters Faced). It represents the percentage of at-bats that result in a walk.
+  * Home Run Rate
+    * Home Run Rate is calculated as (Home Runs / 9 innings pitched). It represents the average number of home runs a pitcher allows per nine innings.
+* Statcast metrics include:
+  * Expected Batting Average (xBA)
+    * xBA is a metric that estimates the batting average a pitcher should have allowed based on the quality of contact made by hitters. It takes things such as exit velocity and launch angle into account.
+  * Hard Hit Rate
+    * Hard Hit balls are defined as those with an exit velocity of 95 mph or higher. It is calculated as (Hard Hit Balls / Total Balls in Play). Hard hit balls are more likely to result in hits, so a lower hard hit rate is generally better for pitchers.
+  * Whiff Rate
+    * Whiff Rate is calculated as (Whiffs / Total Swings). It represents the percentage of swings that result in a miss.
+  * Out of Zone Swing Rate
+    * Out of Zone Swing Rate is calculated as (Out of Zone Swings / Total Pitches Outside the Strike Zone). It represents the percentage of pitches outside the strike zone that result in a swing.
+
+
+To ensure valid predictions, the dataset was split chronologically into training, validation, and test sets. 
+
+Three modeling approaches were used to evaluate the predictive power of the different sets of variables:
+
+1. Linear Regression
+2. Random Forest
+3. Gradient Boosting
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.metrics import mean_squared_error
+
+# Train / Validation / Test Split
+train = df_model[df_model['year'] <= 2022]
+validation = df_model[df_model['year'] == 2023]
+test = df_model[df_model['year'] == 2024]
+
+target = 'target_era_next_year'
+
+# Features
+features_traditional = [
+  'k_percent',
+  'bb_percent',
+  'hr_per_9',
+  'batting_avg'
+]
+
+features_statcast = [
+  'xba',
+  'hard_hit_percent',
+  'whiff_percent',
+  'oz_swing_percent'
+]
+
+features_combined = [
+  'k_percent',
+  'bb_percent',
+  'hr_per_9',
+  'whiff_percent',
+  'xba'
+]
+
+# Modeling function
+def evaluate(model, features, train, val):
+  model.fit(train[features], train[target])
+  preds = model.predict(val[features])
+  rmse = np.sqrt(mean_squared_error(val[target], preds))
+  return rmse
+
+# Models
+models = {
+  'Linear Regression': LinearRegression(),
+  'Gradient Boosting': GradientBoostingRegressor(
+      n_estimators=200,
+      learning_rate=0.05,
+      max_depth=3,
+      random_state=42
+  ),
+  'Random Forest': RandomForestRegressor(
+      n_estimators=100,
+      max_depth=5,
+      random_state=42
+  )
+}
+
+featuresets = {
+  'Traditional': features_traditional,
+  'Statcast': features_statcast,
+  'Combined': features_combined
+}
+
+results = []
+
+for model_name, model in models.items():
+  for feature_name, features in featuresets.items():
+    rmse = evaluate(model, features, train, validation)
+    results.append([model_name, feature_name, rmse])
+
+results_df = pd.DataFrame(results, columns=['Model', 'Features', 'RMSE'])
+results_df
+```
+
+* From the RMSE results, we can see that the Random Forest model with the combined feature set has the lowest RMSE, indicating that it is the best model for predicting future ERA.
+* For all models, the traditional feature set outperforms the statcast feature set, suggesting that traditional statistics are better predictors than their statcast counterparts.
+* However, the traditional statistics can be improved by adding a few key statcast metrics, such as expected batting average and whiff rate.
+
+We can calculate the test RMSE for the best model to see how it performs on unseen data:
+```{python}
+# Final evaluation on test set
+
+best_model = RandomForestRegressor(
+    n_estimators=100,
+    max_depth=5,
+    random_state=42
+)
+
+best_model.fit(
+    train[features_combined],
+    train[target]
+)
+
+test_preds = best_model.predict(
+    test[features_combined]
+)
+
+test_rmse = np.sqrt(
+    mean_squared_error(
+        test[target],
+        test_preds
+    )
+)
+
+print("Test RMSE:", round(test_rmse, 3))
+```
+
+The test RMSE ends up being 0.9, which is a reasonable level of error. This indicates that the model is off by about 0.9 ERA points on average, which is acceptable for this type of prediction. We will go ahead and use this model to predict the top pitchers for the 2026 season, based on their 2025 performance.
+
+Next, we can check the feature importance for the best model to see which features are driving the predictions:
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+
+importances = best_model.feature_importances_
+
+feature_names = features_combined
+
+feat_df = pd.DataFrame({
+    'feature': feature_names,
+    'importance': importances
+}).sort_values('importance')
+
+plt.figure(figsize=(8,5))
+plt.barh(feat_df['feature'], feat_df['importance'])
+plt.title("Random Forest Feature Importance (Combined Model)")
+plt.xlabel("Importance")
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+Strikeout rate appears to contribute the most to the model's preditions. This makes sense, as strikeouts are completely within the control of the pitcher and doesn't rely on the defense or other factors.
+
+### Prediction of Top Pitchers for 2026
+
+Using the best model (Random Forest with combined features), we can predict the top pitchers for the 2026 season based on their 2025 performance.
+
+```{python}
+from sklearn.ensemble import RandomForestRegressor
+
+# Combined features
+features_combined = [
+    'k_percent',
+    'bb_percent',
+    'hr_per_9',
+    'xba',
+    'whiff_percent',
+]
+
+target = 'target_era_next_year'
+
+# Train on full dataset
+train_full = df_model.dropna(subset=features_combined + [target])
+
+best_model.fit(
+    train_full[features_combined],
+    train_full[target]
+)
+
+# Load 2025 season data
+latest_season = df[df['year'] == 2025].copy()
+
+# Clean names
+latest_season['name_clean'] = (
+    latest_season['last_name, first_name']
+    .apply(clean_name)
+)
+
+# Remove missing values
+latest_season = latest_season.dropna(
+    subset=features_combined
+)
+
+# Feature matrix
+X_latest = latest_season[features_combined]
+
+# Predict 2026 ERA
+latest_season['predicted_era_2026'] = (
+    best_model.predict(X_latest)
+)
+
+# Top 10 predicted pitchers for 2026
+top10 = (
+    latest_season
+    .sort_values('predicted_era_2026')
+    .head(10)
+)
+
+# Display results
+top10[[
+    'name_clean',
+    'predicted_era_2026'
+]]
+```
+
+This top 10 list lines up well with what many people consider to be the best pitchers in the league.
+
+### Free Agents
+The main use of a project like this is to evaluate free agents and identify the best available pitchers for a team to sign. We can use our model to predict the 2026 ERA for the free agents on the market:
+
+```{python}
+from sklearn.ensemble import RandomForestRegressor
+
+# Final model with combined features
+features_final = [
+    'k_percent',
+    'bb_percent',
+    'hr_per_9',
+    'xba',
+    'whiff_percent'
+]
+
+target = 'target_era_next_year'
+
+# Train on full dataset
+train_full = df_model.dropna(
+    subset=features_final + [target]
+)
+
+best_model.fit(
+    train_full[features_final],
+    train_full[target]
+)
+
+# Free agent data
+free_agents = pd.DataFrame({
+    'name': [
+        'Valdez, Framber','Cease, Dylan','Suarez, Ranger','King, Michael',
+        'Woodruff, Brandon','Imanaga, Shota','Gallen, Zac','Kelly, Merrill',
+        'Bassitt, Chris','Verlander, Justin','Martinez, Nick','May, Dustin',
+        'Houser, Adrian','Keller, Brad','Mahle, Tyler','Eflin, Zach',
+        'Ponce, Cody','Lorenzen, Michael','Matz, Steven','Anderson, Drew',
+        'Littell, Zack','Quintana, Jose','Civale, Aaron','Sugano, Tomoyuki',
+        'Scherzer, Max','Canning, Griffin','Mikolas, Miles','Manoah, Alek',
+        'Marquez, German','Fedde, Erick','Urquidy, Jose','Montgomery, Jordan',
+        'Corbin, Patrick'
+    ],
+    'Average Annual Value': [
+        '$38,333,333','$30,000,000','$26,000,000','$25,000,000',
+        '$22,025,000','$22,025,000','$22,025,000','$20,000,000',
+        '$18,500,000','$13,000,000','$13,000,000','$12,500,000',
+        '$11,000,000','$11,000,000','$10,000,000','$10,000,000',
+        '$10,000,000','$8,000,000','$7,500,000','$7,000,000',
+        '$7,000,000','$6,000,000','$6,000,000','$5,100,000',
+        '$3,000,000','$2,500,000','$2,250,000','$1,950,000',
+        '$1,750,000','$1,500,000','$1,500,000','$1,250,000',
+        '$1,000,000'
+    ]
+})
+
+# Clean salary data
+free_agents['Average Annual Value'] = (
+    free_agents['Average Annual Value']
+    .replace(r'[\$,]', '', regex=True)
+    .astype(float)
+)
+
+# Clean names
+free_agents['name_clean'] = (
+    free_agents['name']
+    .apply(clean_name)
+)
+
+# 2025 season data
+df_2025 = df[df['year'] == 2025].copy()
+
+df_2025['name_clean'] = (
+    df_2025['last_name, first_name']
+    .apply(clean_name)
+)
+
+# Filter to only free agents
+fa_data = df_2025.merge(
+    free_agents[['name_clean']],
+    on='name_clean',
+    how='inner'
+)
+
+# Remove missing values
+fa_data = fa_data.dropna(
+    subset=features_final
+)
+
+# Predict 2026 ERA for free agents
+fa_data['predicted_era_2026'] = (
+    best_model.predict(
+        fa_data[features_final]
+    )
+)
+
+# Merge with free agent salary data
+fa_results = fa_data.merge(
+    free_agents,
+    on='name_clean',
+    how='left'
+)
+
+# Sort by predicted ERA
+fa_results = fa_results.sort_values(
+    'predicted_era_2026'
+)
+
+# Display results
+fa_results[[
+    'name',
+    'Average Annual Value',
+    'predicted_era_2026'
+]].head(10)
+```
+
+The top 10 free agents based on predicted ERA using the model are mostly made up of pitchers who were signed to large contracts, which suggest that they were correctly identified as the best options in the market. However, there are a few pitchers who were signed to smaller contracts, who may represent hidden gems in the market.
+
+## Results
+
+To show the best pitchers available in the free agent market at different price points, we can create a scatter plot of predicted ERA using the combined random forest model against the average annual value of the contract they signed for this offseason. 
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Clean Dataset
+fa_plot = fa_results.dropna(
+    subset=['predicted_era_2026', 'Average Annual Value']
+).copy()
+
+# Fit market expectation line
+X = fa_plot[['predicted_era_2026']]
+y = fa_plot['Average Annual Value']
+
+reg = LinearRegression()
+reg.fit(X, y)
+
+# Expected market salary based on projected ERA
+fa_plot['expected_salary'] = reg.predict(X)
+
+# Calculate residuals
+fa_plot['residual'] = (
+    fa_plot['expected_salary']
+    - fa_plot['Average Annual Value']
+)
+
+# Top values
+top_underpaid = (
+    fa_plot
+    .sort_values('residual', ascending=False)
+    .head(5)
+)
+
+top_overpaid = (
+    fa_plot
+    .sort_values('residual', ascending=True)
+    .head(5)
+)
+
+# Create Plot
+plt.figure(figsize=(13,8))
+
+# All Players
+plt.scatter(
+    fa_plot['Average Annual Value'],
+    fa_plot['predicted_era_2026'],
+    alpha=0.6
+)
+
+# Regression Line
+x_vals = np.linspace(
+    fa_plot['predicted_era_2026'].min(),
+    fa_plot['predicted_era_2026'].max(),
+    100
+)
+
+y_vals = reg.predict(
+    x_vals.reshape(-1, 1)
+)
+
+plt.plot(
+    y_vals,
+    x_vals,
+    color='black',
+    linewidth=2,
+    label='Market Expectation Line'
+)
+
+# Underpaid Players
+plt.scatter(
+    top_underpaid['Average Annual Value'],
+    top_underpaid['predicted_era_2026'],
+    color='green',
+    s=140,
+    label='Most Underpaid'
+)
+
+# Overpaid Players
+plt.scatter(
+    top_overpaid['Average Annual Value'],
+    top_overpaid['predicted_era_2026'],
+    color='red',
+    s=140,
+    label='Most Overpaid'
+)
+
+# Player Labels
+for _, row in fa_plot.iterrows():
+    plt.text(
+        row['Average Annual Value'],
+        row['predicted_era_2026'],
+        row['name'],
+        fontsize=7,
+        alpha=0.85
+    )
+
+# Format axes
+plt.ticklabel_format(
+    style='plain',
+    axis='x'
+)
+
+# Title and labels
+plt.title(
+    "Free Agent Market Inefficiency: Contract Value vs Projected ERA",
+    fontsize=15
+)
+
+plt.xlabel(
+    "Average Annual Value ($)",
+    fontsize=12
+)
+
+plt.ylabel(
+    "Projected ERA for 2026 (Lower = Better)",
+    fontsize=12
+)
+
+plt.grid(True, alpha=0.3)
+plt.legend()
+
+plt.show()
+```
+
+Key Points:
+
+* The overpaid pitchers tend to be the highest paid players in the market. This shows that the market is often willing to overpay for elite pitching, due to the scarcity of top-tier pitchers.
+* The non-elite pitchers tend to be closer to the market expectation line, which suggests that the market is more efficient at pricing these players.
+
+## Conclusion
+
+From the modeling results, we can make a few conclusions:
+1. Traditional statistics, such as strikeout rate and home run rate, are strong predictors of future ERA. This suggests that these metrics should not be overlooked when evaluating pitchers.
+2. Statcast metrics provide some value in evaluating pitchers, but they do not outperform traditional statistics. Only looking at underlying metrics may lead to missing important information about a pitcher's performance.
+3. A combination of traditional statistics and statcast metrics likely provides the best predictive performance, but more of an emphasis on traditional statistics may be warranted based on the results of this study.
+4. Elite pitchers can have aspects that may be difficult to capture with stats. My modeling may be most useful for identifying hidden gems in the free agent market, rather than predicting the very best pitchers.
+
+## References
+
+Major League Baseball. (n.d.). Statcast leaderboard (custom pitcher search, 2016–2025). Baseball Savant. https://baseballsavant.mlb.com/leaderboard/custom
+
+Major League Baseball. (n.d.). Statcast. MLB.com. Retrieved May 7, 2026, from https://www.mlb.com/glossary/statcast
+
+Major League Baseball. (n.d.). Hard-hit rate. MLB.com. https://www.mlb.com/glossary/statcast/hard-hit-rate
+
+Spotrac. (2026). MLB free agents 2026. Spotrac. https://www.spotrac.com/mlb/free-agents/_/year/2026
