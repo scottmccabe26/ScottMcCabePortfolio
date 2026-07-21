@@ -1,1 +1,5 @@
+Bike-Share Demand Forecasting
 
+Forecasting daily bike rental demand in Washington, D.C. using weather, seasonal, and calendar features, with operational recommendations for staffing and bike rebalancing.
+
+Tools: Python, scikit-learn, pandas, matplotlib
